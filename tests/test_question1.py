@@ -23,8 +23,10 @@ def test_holdout_subscription():
     assert got.kb_article == exp.kb_article
 
 
-def test_baseline_cost_is_high():
-    copilot = SupportCopilot()
+def test_cost_meets_target():
+    # Was `test_baseline_cost_is_high` (> 15_000 total), which only guarded the
+    # unoptimised baseline. Now checks the Question 1 target per ticket.
     for tid in PUBLIC:
+        copilot = SupportCopilot()
         copilot.handle_ticket(tid)
-    assert copilot.session.total_points() > 15_000
+        assert copilot.session.total_points() <= 3000, tid
