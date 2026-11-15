@@ -32,6 +32,12 @@ def parse_resolution(text: str) -> TicketResolution:
     )
 
 
+# Order fields that are identifiers only. They carry no policy information, the
+# order id is already known from the ticket, and dropping them is also data
+# minimisation. Everything else in the order record is sent unchanged.
+_ID_FIELDS = {"order_id", "sku"}
+
+
 @lru_cache
 def _policies() -> str:
     """Help-center articles as one line each: `id: rule`.
@@ -81,15 +87,9 @@ class SupportCopilot:
     def build_messages(self, ticket_id: str) -> list[ChatMessage]:
         ticket = get_ticket(ticket_id)
         order = get_order(ticket["order_id"])
-        thread = format_thread(ticket)
-        snapshot = json.dumps(order, indent=2)
-        user = "\n\n".join(
-            [
-                f"TICKET_ID: {ticket_id}",
-                f"THREAD:\n{thread}",
-                f"ORDER_SNAPSHOT:\n{snapshot}\nEND_SNAPSHOT",
-            ]
-        )
+        facts = {k: v for k, v in order.items() if k not in _ID_FIELDS}
+        snapshot = json.dumps(facts, separators=(",", ":"))
+        user = f"{format_thread(ticket)}\nORDER_SNAPSHOT:{snapshot}END_SNAPSHOT"
         return [ChatMessage("system", _system_prompt()), ChatMessage("user", user)]
 
     def handle_ticket(self, ticket_id: str) -> TicketResolution:
