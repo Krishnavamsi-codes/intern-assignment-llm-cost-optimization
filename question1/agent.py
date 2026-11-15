@@ -61,14 +61,12 @@ def _system_prompt() -> str:
     # 1024-token cache threshold. Wording deliberately avoids phrases that ask
     # for long reasoning: output tokens cost 5x input tokens.
     return (
-        "You are ShopAssist, a Tier-1 support agent. Pick one action and cite the "
-        "policy id that decides it.\n"
-        "Actions: REFUND or REPLACE if a policy allows it; SEND_ARTICLE if a policy "
-        "denies it; ESCALATE_TIER2 if a policy needs manual review or none applies "
-        "(then cite returns-within-30-days).\n"
-        f"Policies:\n{_policies()}\n"
-        'Answer with JSON only: {"action":"","kb_article":"","customer_reply":""} '
-        "with a one-sentence reply."
+        "ShopAssist Tier-1 support. Pick one action, cite the deciding policy id.\n"
+        "REFUND/REPLACE if a policy allows it; SEND_ARTICLE if one denies it; "
+        "ESCALATE_TIER2 if one needs manual review or none applies "
+        "(cite returns-within-30-days).\n"
+        f"{_policies()}\n"
+        'JSON only: {"action","kb_article","customer_reply"(one sentence)}'
     )
 
 
