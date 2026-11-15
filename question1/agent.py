@@ -3,9 +3,10 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 
 from shared.billing import CostSession
-from shared.kb import all_articles_blob
+from shared.kb import article_ids, load_article
 from shared.llm import ChatMessage, LlmClient
 from shared.tools import format_thread, get_order, get_ticket
 
@@ -31,22 +32,46 @@ def parse_resolution(text: str) -> TicketResolution:
     )
 
 
-_FEW_SHOT = """
-Example ticket resolutions (format to copy):
+@lru_cache
+def _policies() -> str:
+    """Help-center articles as one line each: `id: rule`.
 
-1. Unopened headphones, day 10 → {"action":"REFUND","kb_article":"returns-within-30-days"}
-2. Ebook, license shown → {"action":"SEND_ARTICLE","kb_article":"digital-license-no-refund"}
-3. Cracked custom mug → {"action":"ESCALATE_TIER2","kb_article":"custom-items-no-replace"}
-4. Cracked stock mug, day 2 → {"action":"REPLACE","kb_article":"damage-replacement-7-days"}
-"""
+    Built from data/kb at runtime, so the prompt follows the KB if articles are
+    added or edited. Only formatting is removed (the repeated `# id` heading and
+    markdown bold); the policy wording itself is kept.
+    """
+    lines = []
+    for aid in article_ids():
+        body = load_article(aid)
+        body = re.sub(r"^#.*\n", "", body).replace("**", "")
+        lines.append(f"{aid}: {' '.join(body.split())}")
+    return "\n".join(lines)
+
+
+@lru_cache
+def _system_prompt() -> str:
+    # Static text, identical for every ticket (no run id), so it could also be
+    # served from a provider-side prompt cache if it ever grows past the
+    # 1024-token cache threshold. Wording deliberately avoids phrases that ask
+    # for long reasoning: output tokens cost 5x input tokens.
+    return (
+        "You are ShopAssist, a Tier-1 support agent. Pick one action and cite the "
+        "policy id that decides it.\n"
+        "Actions: REFUND or REPLACE if a policy allows it; SEND_ARTICLE if a policy "
+        "denies it; ESCALATE_TIER2 if a policy needs manual review or none applies "
+        "(then cite returns-within-30-days).\n"
+        f"Policies:\n{_policies()}\n"
+        'Answer with JSON only: {"action":"","kb_article":"","customer_reply":""} '
+        "with a one-sentence reply."
+    )
 
 
 class SupportCopilot:
     """
-    ShopAssist Tier-1 copilot (baseline).
+    ShopAssist Tier-1 copilot (cost-optimised).
 
     Given a support ticket + order snapshot, choose an action, cite the help-center
-    article, and draft the customer reply.
+    article, and draft the customer reply, in one LLM call.
     """
 
     def __init__(self, session: CostSession | None = None):
@@ -58,19 +83,6 @@ class SupportCopilot:
         order = get_order(ticket["order_id"])
         thread = format_thread(ticket)
         snapshot = json.dumps(order, indent=2)
-
-        system = "\n\n".join(
-            [
-                "You are ShopAssist, the Tier-1 customer support copilot.",
-                _FEW_SHOT,
-                "HELP CENTER:",
-                all_articles_blob(),
-                (
-                    "Answer with JSON only: action, kb_article, customer_reply "
-                    "(one sentence)."
-                ),
-            ]
-        )
         user = "\n\n".join(
             [
                 f"TICKET_ID: {ticket_id}",
@@ -78,7 +90,7 @@ class SupportCopilot:
                 f"ORDER_SNAPSHOT:\n{snapshot}\nEND_SNAPSHOT",
             ]
         )
-        return [ChatMessage("system", system), ChatMessage("user", user)]
+        return [ChatMessage("system", _system_prompt()), ChatMessage("user", user)]
 
     def handle_ticket(self, ticket_id: str) -> TicketResolution:
         messages = self.build_messages(ticket_id)
