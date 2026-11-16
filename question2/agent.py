@@ -12,6 +12,7 @@ from shared.tools import format_thread, get_order, get_ticket
 
 from question1.agent import parse_resolution
 
+ACTIONS = ("REFUND", "REPLACE", "SEND_ARTICLE", "ESCALATE_TIER2")
 # Cited when no policy applies (named in the action guide, so always allowed).
 FALLBACK_ARTICLE = "returns-within-30-days"
 TOP_K = 3
@@ -66,8 +67,9 @@ class Triage:
 class SupportPipeline:
     """Same product as Question 1: triage, retrieve, compose, audit.
 
-    Triage and retrieve are deterministic (parsing and keyword search, like a
-    search index in production); compose and audit call the LLM.
+    Only compose calls the LLM. Triage and retrieve are deterministic (parsing and
+    keyword search, like a search index in production) and audit is a code check
+    that triggers one corrective LLM call only if the draft is invalid.
     """
 
     def __init__(self, session: CostSession | None = None):
@@ -107,7 +109,7 @@ class SupportPipeline:
         )
         return dict(ranked[:TOP_K])
 
-    def _compose(self, triage: Triage, retrieved: dict[str, str]) -> str:
+    def _compose(self, triage: Triage, retrieved: dict[str, str], note: str = "") -> str:
         policies = "\n".join(f"{aid}: {text}" for aid, text in retrieved.items())
         system = (
             "ShopAssist Tier-1 support. Pick one action, cite the deciding policy id.\n"
@@ -118,19 +120,30 @@ class SupportPipeline:
             'JSON only: {"action","kb_article","customer_reply"(one sentence)}'
         )
         user = f"{triage.thread}\nORDER_SNAPSHOT:{triage.snapshot}END_SNAPSHOT"
-        return self.llm.chat("compose", [ChatMessage("system", system), ChatMessage("user", user)])
+        if note:
+            user += f"\n{note}"
+        label = "compose_retry" if note else "compose"
+        return self.llm.chat(label, [ChatMessage("system", system), ChatMessage("user", user)])
 
     def _audit(self, triage: Triage, retrieved: dict[str, str], draft: str):
-        policies = "\n".join(f"{aid}: {text}" for aid, text in retrieved.items())
-        messages = [
-            ChatMessage(
-                "system",
-                "Audit node: check the draft against the policies; output the final JSON only.\n"
-                + policies,
-            ),
-            ChatMessage(
-                "user",
-                f"{triage.thread}\nORDER_SNAPSHOT:{triage.snapshot}END_SNAPSHOT\nDRAFT:{draft}",
-            ),
-        ]
-        return parse_resolution(self.llm.chat("audit", messages))
+        """Validate the draft in code; one corrective LLM call only if it fails."""
+        problem = self._check(draft, retrieved)
+        if problem is None:
+            return parse_resolution(draft)
+        retry = self._compose(triage, retrieved, note=f"Previous answer rejected: {problem}")
+        if self._check(retry, retrieved) is not None:
+            raise ValueError(f"Audit failed twice: {self._check(retry, retrieved)}")
+        return parse_resolution(retry)
+
+    @staticmethod
+    def _check(completion: str, retrieved: dict[str, str]) -> str | None:
+        try:
+            res = parse_resolution(completion)
+        except (ValueError, KeyError, json.JSONDecodeError) as exc:
+            return f"output is not valid JSON ({exc})"
+        if res.action not in ACTIONS:
+            return f"action must be one of {', '.join(ACTIONS)}"
+        allowed = set(retrieved) | {FALLBACK_ARTICLE}
+        if res.kb_article not in allowed:
+            return f"kb_article must be one of {', '.join(sorted(allowed))}"
+        return None

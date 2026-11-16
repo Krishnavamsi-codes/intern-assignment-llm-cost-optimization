@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import pytest
-
 from shared.kb import expanded_help_center_blob
 from shared.tokens import count_tokens
 from eval.reference import TICKET_EXPECTATIONS
@@ -23,7 +21,6 @@ def test_pipeline_resolves_public_tickets():
         assert got.kb_article == expected.kb_article
 
 
-@pytest.mark.xfail(reason="pipeline not under 2500 yet", strict=True)
 def test_cost_meets_target():
     # Was `test_baseline_cost_is_high` (> 70_000 for one ticket), which only
     # guarded the unoptimised baseline. Now checks the Question 2 target.
