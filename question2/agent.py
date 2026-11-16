@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import uuid
 from dataclasses import dataclass
 
 from shared.billing import CostSession
@@ -45,8 +44,7 @@ class SupportPipeline:
                 "system",
                 "\n".join(
                     [
-                        f"trace-{uuid.uuid4()}",
-                        "Triage node: restate the ticket step by step and list candidate kb articles.",
+                        "Triage node: list candidate kb articles for this ticket. JSON only.",
                         f"ARTICLE TITLES:\n{title_index(500)}",
                         self.help_center[:120_000],
                     ]
@@ -83,7 +81,7 @@ class SupportPipeline:
         messages = [
             ChatMessage(
                 "system",
-                "Compose node: full reasoning, then JSON with action, kb_article, customer_reply.",
+                "Compose node: JSON only with action, kb_article, customer_reply (one sentence).",
             ),
             ChatMessage(
                 "user",
@@ -113,7 +111,7 @@ class SupportPipeline:
         messages = [
             ChatMessage(
                 "system",
-                "Audit node: double-check policy, restate ticket, rewrite JSON output.",
+                "Audit node: check the draft against policy and output the final JSON only.",
             ),
             ChatMessage(
                 "user",
